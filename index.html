@@ -609,50 +609,57 @@ const Voice = (()=>{
 const Music = (()=>{
   const DEG = {1:0, 2:2, 3:4, 5:7, 6:9};
   const BASE = 72; // C5
-  const BPM = 132, EIGHTH = 60/BPM/2;
+  const BPM = 144, EIGHTH = 60/BPM/2;
   const PHRASE_A = [1,2,3,5,5,6,5,3,1,2,3,3,2,1,2];
   const PHRASE_B = [1,2,3,5,5,6,5,3,1,2,3,3,2,2,1];
-  const MEL = [];
-  for(const ph of [PHRASE_A, PHRASE_A, PHRASE_B, PHRASE_A])
-    ph.forEach((d,i)=>MEL.push({d, len:(i===ph.length-1)?2:1}));
-  const STEPS = MEL.reduce((s,m)=>s+m.len, 0); // 64 个八分音符
+  // 展开为事件表：每条音符只在起始步触发、按完整时值发声（尾音保持，不重复触发）
+  const AT = [];
+  let TOTAL = 0;
+  for(const ph of [PHRASE_A, PHRASE_A, PHRASE_B, PHRASE_A]){
+    ph.forEach((d,i)=>{
+      const len = (i===ph.length-1)?2:1;
+      (AT[TOTAL] ||= []).push({midi: BASE+DEG[d], dur: len*EIGHTH});
+      TOTAL += len;
+    });
+  }
+  // 低音：每 4 步一个根音，C / G 交替
+  for(let s=0; s<TOTAL; s+=4)
+    (AT[s] ||= []).push({midi:(s%8===0)?48:43, dur:EIGHTH*3.4, bass:true});
   let on = true;
   try{ on = localStorage.getItem("ddz-music")!=="off"; }catch(e){}
   let timer = null, nextTime = 0, stepIdx = 0, gainNode = null;
   function freq(midi){ return 440*Math.pow(2,(midi-69)/12); }
   function scheduleStep(ctx, t, pos){
-    // 定位到当前音符
-    let acc = 0, m = MEL[0], start = 0;
-    for(const n of MEL){ if(pos>=acc && pos<acc+n.len){ m=n; start=acc; break; } acc+=n.len; }
-    const dur = m.len*EIGHTH;
-    const g = gainNode;
-    const o = ctx.createOscillator(), og = ctx.createGain();
-    o.type = "triangle"; o.frequency.value = freq(BASE+DEG[m.d]);
-    og.gain.setValueAtTime(0.0001, t);
-    og.gain.linearRampToValueAtTime(0.42, t+0.02);
-    og.gain.exponentialRampToValueAtTime(0.0001, t+dur*0.94);
-    o.connect(og); og.connect(g); o.start(t); o.stop(t+dur+0.05);
-    const o2 = ctx.createOscillator(), g2 = ctx.createGain(); // 高八度泛音，音乐盒感
-    o2.type = "sine"; o2.frequency.value = freq(BASE+DEG[m.d]+12);
-    g2.gain.setValueAtTime(0.0001, t);
-    g2.gain.linearRampToValueAtTime(0.12, t+0.02);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t+dur*0.9);
-    o2.connect(g2); g2.connect(g); o2.start(t); o2.stop(t+dur+0.05);
-    // 低音：每 4 个八分音符一个根音，C / G 交替
-    if(pos%4===0){
-      const b = ctx.createOscillator(), bg = ctx.createGain();
-      b.type = "sine"; b.frequency.value = freq((pos%8===0)?48:43);
-      bg.gain.setValueAtTime(0.0001, t);
-      bg.gain.linearRampToValueAtTime(0.30, t+0.03);
-      bg.gain.exponentialRampToValueAtTime(0.0001, t+EIGHTH*3.4);
-      b.connect(bg); bg.connect(g); b.start(t); b.stop(t+EIGHTH*3.5);
+    const evs = AT[pos]; if(!evs) return;
+    for(const ev of evs){
+      if(ev.bass){
+        const b = ctx.createOscillator(), bg = ctx.createGain();
+        b.type = "sine"; b.frequency.value = freq(ev.midi);
+        bg.gain.setValueAtTime(0.0001, t);
+        bg.gain.linearRampToValueAtTime(0.30, t+0.03);
+        bg.gain.exponentialRampToValueAtTime(0.0001, t+ev.dur);
+        b.connect(bg); bg.connect(gainNode); b.start(t); b.stop(t+ev.dur+0.05);
+      }else{
+        const o = ctx.createOscillator(), og = ctx.createGain();
+        o.type = "triangle"; o.frequency.value = freq(ev.midi);
+        og.gain.setValueAtTime(0.0001, t);
+        og.gain.linearRampToValueAtTime(0.50, t+0.02);
+        og.gain.exponentialRampToValueAtTime(0.0001, t+ev.dur*0.94);
+        o.connect(og); og.connect(gainNode); o.start(t); o.stop(t+ev.dur+0.05);
+        const o2 = ctx.createOscillator(), g2 = ctx.createGain(); // 高八度泛音，音乐盒感
+        o2.type = "sine"; o2.frequency.value = freq(ev.midi+12);
+        g2.gain.setValueAtTime(0.0001, t);
+        g2.gain.linearRampToValueAtTime(0.12, t+0.02);
+        g2.gain.exponentialRampToValueAtTime(0.0001, t+ev.dur*0.9);
+        o2.connect(g2); g2.connect(gainNode); o2.start(t); o2.stop(t+ev.dur+0.05);
+      }
     }
   }
   function tick(){
     const ctx = Sound.getCtx(); if(!ctx) return;
     while(nextTime < ctx.currentTime + 0.18){
       scheduleStep(ctx, nextTime, stepIdx);
-      nextTime += EIGHTH; stepIdx = (stepIdx+1)%STEPS;
+      nextTime += EIGHTH; stepIdx = (stepIdx+1)%TOTAL;
     }
   }
   function start(){
@@ -661,10 +668,10 @@ const Music = (()=>{
     if(!ctx) return;
     if(!gainNode){
       gainNode = ctx.createGain();
-      gainNode.gain.value = on ? 0.09 : 0;
+      gainNode.gain.value = on ? 0.12 : 0;
       gainNode.connect(ctx.destination);
     }else{
-      gainNode.gain.setTargetAtTime(on?0.09:0, ctx.currentTime, 0.05);
+      gainNode.gain.setTargetAtTime(on?0.12:0, ctx.currentTime, 0.05);
     }
     nextTime = Math.max(nextTime, ctx.currentTime + 0.06);
     timer = setInterval(tick, 30);
