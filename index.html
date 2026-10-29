@@ -96,7 +96,7 @@
   .card{
     width:64px;height:92px;border-radius:9px;border:1.5px solid #2b2b2b;background:#fff;color:#111;
     position:relative;cursor:pointer;user-select:none;flex:0 0 auto;
-    box-shadow:0 3px 8px rgba(0,0,0,.35);transition:transform .15s ease, box-shadow .15s ease;
+    box-shadow:0 3px 8px rgba(0,0,0,.35);transition:transform .15s ease, box-shadow .15s ease, filter .2s ease;background-color:#fff;
     font-weight:700;
   }
   .card.red{color:#d21f2c}
@@ -122,12 +122,13 @@
   .card.mini{width:30px;height:44px;border-radius:6px}
   .card.mini::after{font-size:12px}
   .mini-hand .card.mini + .card.mini{margin-top:-30px}
-  .seat-bottom .hand .card + .card{margin-left:-26px}
+  .seat-bottom .hand .card + .card{margin-left:var(--card-step,-26px)}
   .seat-bottom .hand .card:hover{transform:translateY(-12px)}
   .seat-bottom .hand .card.selected{transform:translateY(-20px);border:2px solid var(--gold);box-shadow:0 0 16px rgba(255,215,0,.8)}
   .card.dealt{animation:dealIn .4s ease both}
   @keyframes dealIn{from{opacity:0;transform:translateY(18px) scale(.85)}to{opacity:1;transform:none}}
-  .card.disabled{opacity:.45;pointer-events:none}
+  /* 不可用时只压暗/降饱和，绝不用 opacity：重叠的牌会透出下层造成重影 */
+  .card.disabled{filter:brightness(.68) saturate(.6);pointer-events:none}
   /* ---------- 状态与按钮 ---------- */
   .status{
     max-width:1120px;margin:2px auto 0;padding:0 16px;text-align:center;
@@ -188,20 +189,21 @@
     .seat-left,.seat-right{top:40%}
     .avatar{width:52px;height:52px;font-size:27px;border-width:2px}
     .seat-name{font-size:13px}
-    .card{width:46px;height:66px;border-radius:7px}
-    .card .corner{font-size:12px;left:4px;top:2px}
-    .card .corner small{font-size:10px}
-    .card .pip{font-size:21px}
-    .seat-bottom .hand .card + .card{margin-left:-24px}
-    .card.mini{width:24px;height:34px}
-    .mini-hand .card.mini + .card.mini{margin-top:-24px}
-    .card.small{width:34px;height:48px}
-    .card.small .corner{font-size:9px}
-    .card.small .pip{font-size:15px}
-    .hand{min-height:70px}
+    .card{width:56px;height:80px;border-radius:8px}
+    .card .corner{font-size:14px;left:4px;top:3px}
+    .card .corner small{font-size:12px}
+    .card .pip{font-size:26px}
+    .seat-bottom .hand .card + .card{margin-left:var(--card-step,-34px)}
+    .card.mini{width:26px;height:38px}
+    .mini-hand .card.mini + .card.mini{margin-top:-26px}
+    .card.small{width:38px;height:54px}
+    .card.small .corner{font-size:10px}
+    .card.small .pip{font-size:17px}
+    .hand{min-height:86px}
+    .seat-bottom{width:100%}
     .btn{font-size:15px;padding:11px 20px;min-width:88px}
     .status{font-size:15px}
-    .bottom-cards .mini-row{min-height:36px}
+    .bottom-cards .mini-row{min-height:40px}
   }
 </style>
 </head>
@@ -215,6 +217,7 @@
       <span class="mult-chip">倍数 ×<span id="mult">1</span></span>
       <button class="score-chip" id="btnSound" type="button" style="cursor:pointer">🔊 音效开</button>
       <button class="score-chip" id="btnVoice" type="button" style="cursor:pointer">🗣️ 语音开</button>
+      <button class="score-chip" id="btnMusic" type="button" style="cursor:pointer">🎵 音乐开</button>
     </div>
   </header>
 
@@ -511,6 +514,7 @@ const Sound = (()=>{
   }
   return {
     get on(){ return on; },
+    getCtx(){ return ac(); },
     debug(){ return {on, hasCtx: !!ctx, ctxState: ctx?ctx.state:null}; },
     toggle(){
       on=!on;
@@ -599,8 +603,93 @@ const Voice = (()=>{
     say, announce,
   };
 })();
-document.addEventListener("pointerdown", ()=>Sound.unlock());
-document.addEventListener("keydown", ()=>Sound.unlock());
+/* ================= 背景音乐：蜜雪冰城主题曲旋律（WebAudio 合成） =================
+   旋律源自美国民谣《Oh! Susanna》（1848，公共版权），蜜雪版为其简化改编，
+   简谱：123556531233212 / 123556531233221。本实现只合成旋律线，不含歌词与原录音。 */
+const Music = (()=>{
+  const DEG = {1:0, 2:2, 3:4, 5:7, 6:9};
+  const BASE = 72; // C5
+  const BPM = 132, EIGHTH = 60/BPM/2;
+  const PHRASE_A = [1,2,3,5,5,6,5,3,1,2,3,3,2,1,2];
+  const PHRASE_B = [1,2,3,5,5,6,5,3,1,2,3,3,2,2,1];
+  const MEL = [];
+  for(const ph of [PHRASE_A, PHRASE_A, PHRASE_B, PHRASE_A])
+    ph.forEach((d,i)=>MEL.push({d, len:(i===ph.length-1)?2:1}));
+  const STEPS = MEL.reduce((s,m)=>s+m.len, 0); // 64 个八分音符
+  let on = true;
+  try{ on = localStorage.getItem("ddz-music")!=="off"; }catch(e){}
+  let timer = null, nextTime = 0, stepIdx = 0, gainNode = null;
+  function freq(midi){ return 440*Math.pow(2,(midi-69)/12); }
+  function scheduleStep(ctx, t, pos){
+    // 定位到当前音符
+    let acc = 0, m = MEL[0], start = 0;
+    for(const n of MEL){ if(pos>=acc && pos<acc+n.len){ m=n; start=acc; break; } acc+=n.len; }
+    const dur = m.len*EIGHTH;
+    const g = gainNode;
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.type = "triangle"; o.frequency.value = freq(BASE+DEG[m.d]);
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.linearRampToValueAtTime(0.42, t+0.02);
+    og.gain.exponentialRampToValueAtTime(0.0001, t+dur*0.94);
+    o.connect(og); og.connect(g); o.start(t); o.stop(t+dur+0.05);
+    const o2 = ctx.createOscillator(), g2 = ctx.createGain(); // 高八度泛音，音乐盒感
+    o2.type = "sine"; o2.frequency.value = freq(BASE+DEG[m.d]+12);
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.linearRampToValueAtTime(0.12, t+0.02);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t+dur*0.9);
+    o2.connect(g2); g2.connect(g); o2.start(t); o2.stop(t+dur+0.05);
+    // 低音：每 4 个八分音符一个根音，C / G 交替
+    if(pos%4===0){
+      const b = ctx.createOscillator(), bg = ctx.createGain();
+      b.type = "sine"; b.frequency.value = freq((pos%8===0)?48:43);
+      bg.gain.setValueAtTime(0.0001, t);
+      bg.gain.linearRampToValueAtTime(0.30, t+0.03);
+      bg.gain.exponentialRampToValueAtTime(0.0001, t+EIGHTH*3.4);
+      b.connect(bg); bg.connect(g); b.start(t); b.stop(t+EIGHTH*3.5);
+    }
+  }
+  function tick(){
+    const ctx = Sound.getCtx(); if(!ctx) return;
+    while(nextTime < ctx.currentTime + 0.18){
+      scheduleStep(ctx, nextTime, stepIdx);
+      nextTime += EIGHTH; stepIdx = (stepIdx+1)%STEPS;
+    }
+  }
+  function start(){
+    if(timer) return;
+    let ctx; try{ ctx = Sound.getCtx(); }catch(e){ return; }
+    if(!ctx) return;
+    if(!gainNode){
+      gainNode = ctx.createGain();
+      gainNode.gain.value = on ? 0.09 : 0;
+      gainNode.connect(ctx.destination);
+    }else{
+      gainNode.gain.setTargetAtTime(on?0.09:0, ctx.currentTime, 0.05);
+    }
+    nextTime = Math.max(nextTime, ctx.currentTime + 0.06);
+    timer = setInterval(tick, 30);
+    tick();
+  }
+  function stop(){
+    if(timer){ clearInterval(timer); timer = null; }
+    if(gainNode){
+      try{ gainNode.gain.setTargetAtTime(0, Sound.getCtx().currentTime, 0.05); }catch(e){}
+    }
+  }
+  return {
+    get on(){ return on; },
+    debug(){ return {on, playing: !!timer}; },
+    unlock(){ if(on) start(); },
+    toggle(){
+      on = !on;
+      try{ localStorage.setItem("ddz-music", on?"on":"off"); }catch(e){}
+      if(on) start(); else stop();
+      return on;
+    },
+  };
+})();
+document.addEventListener("pointerdown", ()=>{ Sound.unlock(); Music.unlock(); }, {once:true});
+document.addEventListener("keydown", ()=>{ Sound.unlock(); Music.unlock(); }, {once:true});
 </script>
 <script>
 "use strict";
@@ -613,7 +702,7 @@ const els = {
   scoreYou:$("score-you"), scoreLeft:$("score-left"), scoreRight:$("score-right"),
   bottomTip:$("bottomTip"), bottomRow:$("bottomRow"),
   playedLabel:$("playedLabel"), playedCards:$("playedCards"),
-  handYou:$("hand-you"),
+  handYou:$("hand-you"), handBottom:$("hand-you"),
 };
 const HAND_EL = {left:$("hand-left"), top:$("hand-right"), bottom:$("hand-you")};
 const COUNT_EL = {left:$("count-left"), top:$("count-right"), bottom:$("count-you")};
@@ -708,12 +797,28 @@ function renderAll(dealt=false){
   }else{
     els.playedLabel.style.display = "none";
   }
+  fitHand();
+  requestAnimationFrame(fitHand);
   els.mult.textContent = S.mult;
   els.scoreYou.textContent = scores.bottom;
   els.scoreLeft.textContent = scores.left;
   els.scoreRight.textContent = scores.top;
   renderControls();
 }
+
+/* 手机上手牌按实际宽度自动算重叠量：牌越大、剩牌越少，间隔越大，且永不溢出 */
+function fitHand(){
+  const el = els.handBottom; if(!el || !S) return;
+  const first = el.querySelector(".card");
+  const w = first ? first.offsetWidth : 56;
+  const n = Math.max(1, S.hands.bottom.length);
+  // 注意：.seat-bottom 是 align-items:center 的 flex 容器，手牌自身会被内容撑宽，
+  // 所以不能用手牌自己的 clientWidth，必须用父容器的宽度作可用宽度
+  const avail = (el.parentElement ? el.parentElement.clientWidth : 360) - 4 || 360;
+  const step = Math.max(19, Math.min(38, (avail - w)/(n-1 || 1)));
+  el.style.setProperty("--card-step", (-(w - step)) + "px");
+}
+window.addEventListener("resize", fitHand);
 
 function setStatus(html){ els.status.innerHTML = html; }
 let toastTimer=null;
@@ -1018,12 +1123,14 @@ doPlay = function(p, cards, an){
   _doPlay(p, cards, an);
 };
 
-const btnSound = $("btnSound"), btnVoice = $("btnVoice");
+const btnSound = $("btnSound"), btnVoice = $("btnVoice"), btnMusic = $("btnMusic");
 function syncSoundBtn(){ btnSound.textContent = Sound.on ? "🔊 音效开" : "🔇 音效关"; }
 function syncVoiceBtn(){ btnVoice.textContent = Voice.on ? "🗣️ 语音开" : "🔇 语音关"; }
-syncSoundBtn(); syncVoiceBtn();
+function syncMusicBtn(){ btnMusic.textContent = Music.on ? "🎵 音乐开" : "🔇 音乐关"; }
+syncSoundBtn(); syncVoiceBtn(); syncMusicBtn();
 btnSound.addEventListener("click", ()=>{ Sound.toggle(); syncSoundBtn(); if(Sound.on) Sound.select(); });
 btnVoice.addEventListener("click", ()=>{ Voice.toggle(); syncVoiceBtn(); if(Voice.on) Voice.say("语音已打开"); });
+btnMusic.addEventListener("click", ()=>{ Music.toggle(); syncMusicBtn(); });
 
 newRound();
 </script>
