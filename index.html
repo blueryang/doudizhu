@@ -210,10 +210,11 @@
     <div class="logo">🃏 斗地主<small>三人牌桌 · 单机版</small></div>
     <div class="scores">
       <span class="score-chip me">🧑 你 <b id="score-you">0</b></span>
-      <span class="score-chip">🤖 左家 <b id="score-left">0</b></span>
-      <span class="score-chip">🤖 右家 <b id="score-right">0</b></span>
+      <span class="score-chip">🤖 <span id="chip-left">左家</span> <b id="score-left">0</b></span>
+      <span class="score-chip">🤖 <span id="chip-right">右家</span> <b id="score-right">0</b></span>
       <span class="mult-chip">倍数 ×<span id="mult">1</span></span>
       <button class="score-chip" id="btnSound" type="button" style="cursor:pointer">🔊 音效开</button>
+      <button class="score-chip" id="btnVoice" type="button" style="cursor:pointer">🗣️ 语音开</button>
     </div>
   </header>
 
@@ -227,7 +228,7 @@
 
     <section class="seat seat-left" id="seat-left">
       <div class="avatar">🤖</div>
-      <div class="seat-name">AI 左家<span class="badge" id="badge-left">地主</span></div>
+      <div class="seat-name"><span id="name-left">左家</span><span class="badge" id="badge-left">地主</span></div>
       <div class="seat-count">剩 <span id="count-left">17</span> 张</div>
       <div class="think" id="think-left"></div>
       <div class="pass-tag" id="pass-left">不出</div>
@@ -236,7 +237,7 @@
 
     <section class="seat seat-right" id="seat-right">
       <div class="avatar">🤖</div>
-      <div class="seat-name">AI 右家<span class="badge" id="badge-right">地主</span></div>
+      <div class="seat-name"><span id="name-right">右家</span><span class="badge" id="badge-right">地主</span></div>
       <div class="seat-count">剩 <span id="count-right">17</span> 张</div>
       <div class="think" id="think-right"></div>
       <div class="pass-tag" id="pass-right">不出</div>
@@ -251,7 +252,7 @@
     <section class="seat seat-bottom" id="seat-bottom">
       <div class="hand" id="hand-you"></div>
       <div class="avatar">🧑</div>
-      <div class="seat-name">你<span class="badge" id="badge-you">地主</span></div>
+      <div class="seat-name"><span id="name-you">你</span><span class="badge" id="badge-you">地主</span></div>
       <div class="seat-count">剩 <span id="count-you">17</span> 张</div>
       <div class="pass-tag" id="pass-you">不出</div>
     </section>
@@ -261,7 +262,7 @@
 
   <div class="controls" id="controls"></div>
 
-  <p class="rules-note">单机娱乐：你 vs 两位 AI · 支持顺子 / 连对 / 飞机 / 炸弹 / 王炸 · 炸弹与春天翻倍 · 点「提示」自动找能大过上家的牌</p>
+  <p class="rules-note">单机娱乐：三人牌桌 · 支持顺子 / 连对 / 飞机 / 炸弹 / 王炸 · 炸弹与春天翻倍 · 点「提示」自动找能大过上家的牌</p>
 
   <div class="modal" id="modal">
     <div class="modal-card">
@@ -279,7 +280,14 @@
 /* ================= 牌 ================= */
 const SUITS = ["♠","♥","♣","♦"];
 const RANK_LABEL = {11:"J",12:"Q",13:"K",14:"A",15:"2",16:"小王",17:"大王"};
-const NAMES = {left:"AI 左家", top:"AI 右家", bottom:"你"};
+/* 座位称呼：按本局身份动态显示（地主 / 队友 / 农民），未定地主前显示左家/右家 */
+function pname(p){
+  if(p==="bottom") return "你";
+  if(!S || !S.landlord) return p==="left" ? "左家" : "右家";
+  if(S.landlord===p) return "地主";
+  if(S.landlord==="bottom") return "农民";
+  return "队友";
+}
 const ORDER = ["left","top","bottom"];
 
 function makeDeck(){
@@ -535,6 +543,62 @@ const Sound = (()=>{
     lose(){ [392,330,262,196].forEach((f,i)=>tone(f,.18,{type:"sine",gain:.1,delay:i*.11})); },
   };
 })();
+/* ================= 语音播报（系统中文语音，无需音频文件） ================= */
+const Voice = (()=>{
+  const RANK_SAY = {3:"三",4:"四",5:"五",6:"六",7:"七",8:"八",9:"九",10:"十",
+    11:"勾",12:"圈",13:"凯",14:"尖",15:"二",16:"小王",17:"大王"};
+  let on = true;
+  try{ on = localStorage.getItem("ddz-voice")!=="off"; }catch(e){}
+  let zhVoice = null;
+  function pickVoice(){
+    try{
+      const vs = speechSynthesis.getVoices();
+      zhVoice = vs.find(v=>v.lang && v.lang.toLowerCase().indexOf("zh")===0) || null;
+    }catch(e){}
+  }
+  const synthOK = "speechSynthesis" in window;
+  if(synthOK){ pickVoice(); try{ speechSynthesis.onvoiceschanged = pickVoice; }catch(e){} }
+  function say(text){
+    if(!on || !text || !synthOK) return;
+    try{
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-CN";
+      if(zhVoice) u.voice = zhVoice;
+      u.rate = 1.05; u.pitch = 1;
+      speechSynthesis.speak(u);
+    }catch(e){}
+  }
+  function announce(an){
+    const r = RANK_SAY[an.rank] || "";
+    let text = "";
+    switch(an.type){
+      case "single": text = r; break;
+      case "pair": text = "对" + r; break;
+      case "trio": text = "三个" + r; break;
+      case "trio_single": text = "三带一"; break;
+      case "trio_pair": text = "三带一对"; break;
+      case "straight": text = "顺子"; break;
+      case "pairs_chain": text = "连对"; break;
+      case "trio_chain": text = "飞机"; break;
+      case "trio_chain_single": case "trio_chain_pair": text = "飞机带翅膀"; break;
+      case "four_two_single": case "four_two_pair": text = "四带二"; break;
+      case "bomb": text = "炸弹"; break;
+      case "rocket": text = "王炸"; break;
+    }
+    say(text);
+  }
+  return {
+    get on(){ return on; },
+    toggle(){
+      on = !on;
+      try{ localStorage.setItem("ddz-voice", on?"on":"off"); }catch(e){}
+      if(!on && synthOK){ try{ speechSynthesis.cancel(); }catch(e){} }
+      return on;
+    },
+    say, announce,
+  };
+})();
 document.addEventListener("pointerdown", ()=>Sound.unlock());
 document.addEventListener("keydown", ()=>Sound.unlock());
 </script>
@@ -555,6 +619,8 @@ const HAND_EL = {left:$("hand-left"), top:$("hand-right"), bottom:$("hand-you")}
 const COUNT_EL = {left:$("count-left"), top:$("count-right"), bottom:$("count-you")};
 const SEAT_EL = {left:$("seat-left"), top:$("seat-right"), bottom:$("seat-bottom")};
 const BADGE_EL = {left:$("badge-left"), top:$("badge-right"), bottom:$("badge-you")};
+const NAME_EL = {left:$("name-left"), top:$("name-right"), bottom:$("name-you")};
+const CHIP_EL = {left:$("chip-left"), top:$("chip-right")};
 const THINK_EL = {left:$("think-left"), top:$("think-right")};
 const PASS_EL = {left:$("pass-left"), top:$("pass-right"), bottom:$("pass-you")};
 
@@ -627,7 +693,9 @@ function renderAll(dealt=false){
       S.hands[p].forEach(()=>el.appendChild(backEl(true)));
     }
     COUNT_EL[p].textContent = S.hands[p].length;
-    BADGE_EL[p].classList.toggle("show", S.landlord===p);
+    NAME_EL[p].textContent = pname(p);
+    if(p!=="bottom") CHIP_EL[p].textContent = pname(p);
+    BADGE_EL[p].classList.toggle("show", S.landlord===p && p==="bottom");
     SEAT_EL[p].classList.toggle("active", S.currentTurn===p && S.phase==="playing");
     PASS_EL[p].classList.toggle("show", !!S.passed[p]);
   }
@@ -635,7 +703,7 @@ function renderAll(dealt=false){
   els.playedCards.innerHTML = "";
   if(S.lastPlay && S.lastPlay.cards.length){
     els.playedLabel.style.display = "";
-    els.playedLabel.textContent = `${NAMES[S.lastPlayer]} 出了 ${describe(S.lastPlay.an)}`;
+    els.playedLabel.textContent = `${pname(S.lastPlayer)} 出了 ${describe(S.lastPlay.an)}`;
     for(const c of S.lastPlay.cards) els.playedCards.appendChild(cardEl(c,{small:true}));
   }else{
     els.playedLabel.style.display = "none";
@@ -672,9 +740,13 @@ function doBid(p, action){
     S.bids[p]=level;
     S.mult = Math.pow(2, level-1);
     Sound.bid();
-    setStatus(`${NAMES[p]} ${action==="bid"?"叫地主":"抢地主"}！`);
+    Voice.say(action==="bid" ? "叫地主" : "抢地主");
+    setStatus(`${pname(p)} ${action==="bid"?"叫地主":"抢地主"}！`);
   }else{
-    setStatus(`${NAMES[p]} 不叫。`);
+    const highest = Math.max(0, ...Object.values(S.bids));
+    const word = highest>0 ? "不抢" : "不叫";
+    Voice.say(word);
+    setStatus(`${pname(p)} ${word}。`);
   }
   advanceBid();
 }
@@ -694,8 +766,8 @@ function advanceBid(){
     S.phase = "playing";
     S.currentTurn = landlord;
     S.lastPlay = null; S.lastPlayer = null; S.passes = 0;
-    els.bottomTip.textContent = "底牌已归 " + NAMES[landlord];
-    setStatus(`🎉 ${NAMES[landlord]} 是地主，${landlord==="bottom"?"由你先出牌。":"地主先出牌。"}`);
+    els.bottomTip.textContent = "底牌已归 " + pname(landlord);
+    setStatus(`🎉 ${pname(landlord)} 是地主，${landlord==="bottom"?"由你先出牌。":"地主先出牌。"}`);
     renderAll();
     if(landlord!=="bottom") scheduleAI();
     return;
@@ -703,7 +775,7 @@ function advanceBid(){
   S.bidTurn = S.bidOrder[S.bidIdx];
   renderAll();
   if(S.bidTurn!=="bottom"){
-    setStatus(`${NAMES[S.bidTurn]} 正在考虑…`);
+    setStatus(`${pname(S.bidTurn)} 正在考虑…`);
     S.aiTimer = setTimeout(()=>{
       doBid(S.bidTurn, aiBidDecision(S.bidTurn));
     }, 700 + Math.random()*500);
@@ -778,11 +850,13 @@ function passTurn(){
   S.selected = [];
   S.passed.bottom = true;
   Sound.pass();
+  Voice.say("不要");
   setStatus("你选择不出。");
   advanceTurn("bottom", true);
 }
 function doPlay(p, cards, an){
   Sound.play(an.type);
+  Voice.announce(an);
   S.hands[p] = S.hands[p].filter(c=>!cards.includes(c));
   S.lastPlay = {cards, an}; S.lastPlayer = p; S.passes = 0;
   if(p!=="bottom" || true) S.selected = [];
@@ -822,7 +896,7 @@ function advanceTurn(from, passed){
   renderAll();
   if(S.over) return;
   if(S.currentTurn!=="bottom"){
-    setStatus(`${NAMES[S.currentTurn]} 正在思考…`);
+    setStatus(`${pname(S.currentTurn)} 正在思考…`);
     THINK_EL[S.currentTurn].textContent = "思考中…";
     scheduleAI();
   }else{
@@ -885,7 +959,8 @@ function aiTurn(){
 function aiPass(p){
   S.passed[p] = true;
   Sound.pass();
-  setStatus(`${NAMES[p]} 不出。`);
+  Voice.say("不要");
+  setStatus(`${pname(p)} 不出。`);
   advanceTurn(p, true);
 }
 
@@ -918,16 +993,17 @@ function endRound(winner){
   for(const p of ORDER){ scores[p]+=delta[p]; }
   saveScores();
   const winYou = winner==="bottom";
-  $("modalTitle").textContent = winYou ? "🎉 你赢了！" : `😢 ${NAMES[winner]} 赢了`;
+  $("modalTitle").textContent = winYou ? "🎉 你赢了！" : `😢 ${pname(winner)} 赢了`;
   $("modalSub").textContent =
-    `${NAMES[S.landlord]} 是地主 · 倍数 ×${mult}${spring?"（春天翻倍）":""}${bombs?` · 本局 ${bombs} 个炸弹/王炸`:""}`;
+    `${pname(S.landlord)} 是地主 · 倍数 ×${mult}${spring?"（春天翻倍）":""}${bombs?` · 本局 ${bombs} 个炸弹/王炸`:""}`;
   if(winYou) Sound.win(); else Sound.lose();
+  Voice.say(winYou ? "你赢了" : (S.landlord==="bottom" ? "农民赢了" : "地主赢了"));
   $("modalScores").innerHTML = ORDER.map(p=>{
     const d = delta[p];
-    return `<div>${NAMES[p]}${p===S.landlord?"（地主）":""}：<span class="${d>=0?"win":"lose"}">${d>=0?"+":""}${d}</span>　总分 ${scores[p]}</div>`;
+    return `<div>${pname(p)}${p===S.landlord?"（地主）":""}：<span class="${d>=0?"win":"lose"}">${d>=0?"+":""}${d}</span>　总分 ${scores[p]}</div>`;
   }).join("");
   renderAll();
-  setStatus(winYou ? "漂亮！你赢下了这一局。" : `${NAMES[winner]} 先出完了牌。`);
+  setStatus(winYou ? "漂亮！你赢下了这一局。" : `${pname(winner)} 先出完了牌。`);
   els.modal.classList.add("show");
 }
 $("btnAgain").addEventListener("click", ()=>{
@@ -942,10 +1018,12 @@ doPlay = function(p, cards, an){
   _doPlay(p, cards, an);
 };
 
-const btnSound = $("btnSound");
+const btnSound = $("btnSound"), btnVoice = $("btnVoice");
 function syncSoundBtn(){ btnSound.textContent = Sound.on ? "🔊 音效开" : "🔇 音效关"; }
-syncSoundBtn();
+function syncVoiceBtn(){ btnVoice.textContent = Voice.on ? "🗣️ 语音开" : "🔇 语音关"; }
+syncSoundBtn(); syncVoiceBtn();
 btnSound.addEventListener("click", ()=>{ Sound.toggle(); syncSoundBtn(); if(Sound.on) Sound.select(); });
+btnVoice.addEventListener("click", ()=>{ Voice.toggle(); syncVoiceBtn(); if(Voice.on) Voice.say("语音已打开"); });
 
 newRound();
 </script>
