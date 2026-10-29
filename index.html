@@ -208,6 +208,7 @@
 </style>
 </head>
 <body>
+  <audio id="bgm" src="BGM.mp3" loop preload="auto"></audio>
   <header class="topbar">
     <div class="logo">🃏 斗地主<small>三人牌桌 · 单机版</small></div>
     <div class="scores">
@@ -603,9 +604,8 @@ const Voice = (()=>{
     say, announce,
   };
 })();
-/* ================= 背景音乐：蜜雪冰城主题曲旋律（WebAudio 合成） =================
-   旋律源自美国民谣《Oh! Susanna》（1848，公共版权），蜜雪版为其简化改编，
-   简谱：123556531233212 / 123556531233221。本实现只合成旋律线，不含歌词与原录音。 */
+/* 背景音乐已改用 <audio> 播 BGM.mp3；以下合成引擎停用，仅保留代码备用。
+   原合成版旋律源自美国民谣《Oh! Susanna》（1848，公共版权）的简化改编，简谱：123556531233212 / 123556531233221。*/
 const Music = (()=>{
   const DEG = {1:0, 2:2, 3:4, 5:7, 6:9};
   const BASE = 72; // C5
@@ -700,13 +700,12 @@ const Music = (()=>{
     toggle(){
       on = !on;
       try{ localStorage.setItem("ddz-music", on?"on":"off"); }catch(e){}
-      if(on) start(); else stop();
       return on;
     },
   };
 })();
 /* iOS 上音频解锁偶尔一次不成功，改为每次交互都尝试恢复；start() 有防重入保护 */
-function unlockAudio(){ Sound.unlock(); Music.unlock(); }
+function unlockAudio(){ Sound.unlock(); }
 document.addEventListener("pointerdown", unlockAudio);
 document.addEventListener("touchend", unlockAudio);
 document.addEventListener("keydown", unlockAudio);
@@ -1151,7 +1150,14 @@ function syncMusicBtn(){ btnMusic.textContent = Music.on ? "🎵 音乐开" : "�
 syncSoundBtn(); syncVoiceBtn(); syncMusicBtn();
 btnSound.addEventListener("click", ()=>{ Sound.toggle(); syncSoundBtn(); if(Sound.on) Sound.select(); });
 btnVoice.addEventListener("click", ()=>{ Voice.toggle(); syncVoiceBtn(); if(Voice.on) Voice.say("语音已打开"); });
-btnMusic.addEventListener("click", ()=>{ const nowOn = Music.toggle(); syncMusicBtn(); if(nowOn) Music.test(); });
+const bgm = document.getElementById("bgm");
+bgm.volume = 0.6;
+/* 首次触摸且音乐开关开着时，自动开始播 BGM（浏览器要求音频必须由用户手势触发） */
+document.addEventListener("pointerdown", ()=>{ if(Music.on && bgm.paused) bgm.play().catch(()=>{}); }, {once:true});
+btnMusic.addEventListener("click", ()=>{
+  const nowOn = Music.toggle(); syncMusicBtn();
+  if(nowOn){ bgm.play().catch(()=>{}); } else { bgm.pause(); }
+});
 
 newRound();
 </script>
