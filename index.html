@@ -213,6 +213,7 @@
       <span class="score-chip">🤖 左家 <b id="score-left">0</b></span>
       <span class="score-chip">🤖 右家 <b id="score-right">0</b></span>
       <span class="mult-chip">倍数 ×<span id="mult">1</span></span>
+      <button class="score-chip" id="btnSound" type="button" style="cursor:pointer">🔊 音效开</button>
     </div>
   </header>
 
@@ -454,6 +455,91 @@ function handStrength(hand){
 </script>
 <script>
 "use strict";
+/* ================= 音效（WebAudio 合成，无外部音频文件） ================= */
+const Sound = (()=>{
+  let ctx=null, noiseBuf=null;
+  let on = true;
+  try{ on = localStorage.getItem("ddz-sound")!=="off"; }catch(e){}
+  function ac(){
+    if(!ctx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return null;
+      ctx = new AC();
+      const len = Math.floor(ctx.sampleRate*0.4);
+      noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+    }
+    if(ctx.state==="suspended") ctx.resume().catch(()=>{});
+    return ctx;
+  }
+  function env(g, t0, peak, dur){
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+  }
+  function tone(freq, dur, o={}){
+    const c=ac(); if(!c||!on) return;
+    const {type="sine", gain=0.15, slide=null, delay=0} = o;
+    const t0=c.currentTime+delay;
+    const osc=c.createOscillator(), g=c.createGain();
+    osc.type=type; osc.frequency.setValueAtTime(freq,t0);
+    if(slide) osc.frequency.exponentialRampToValueAtTime(slide, t0+dur);
+    env(g,t0,gain,dur);
+    osc.connect(g); g.connect(c.destination);
+    osc.start(t0); osc.stop(t0+dur+0.05);
+  }
+  function noise(dur, o={}){
+    const c=ac(); if(!c||!on) return;
+    const {gain=0.2, freq=1800, q=1, type="bandpass", slideTo=null, delay=0} = o;
+    const t0=c.currentTime+delay;
+    const src=c.createBufferSource(); src.buffer=noiseBuf; src.loop=true;
+    const f=c.createBiquadFilter(); f.type=type;
+    f.frequency.setValueAtTime(freq,t0); f.Q.value=q;
+    if(slideTo) f.frequency.exponentialRampToValueAtTime(slideTo, t0+dur);
+    const g=c.createGain(); env(g,t0,gain,dur);
+    src.connect(f); f.connect(g); g.connect(c.destination);
+    src.start(t0); src.stop(t0+dur+0.05);
+  }
+  return {
+    get on(){ return on; },
+    debug(){ return {on, hasCtx: !!ctx, ctxState: ctx?ctx.state:null}; },
+    toggle(){
+      on=!on;
+      try{ localStorage.setItem("ddz-sound", on?"on":"off"); }catch(e){}
+      return on;
+    },
+    unlock(){ try{ ac(); }catch(e){} },
+    select(){ tone(1400, .05, {type:"triangle", gain:.06}); },
+    deal(){ noise(.12, {gain:.08, freq:2600, slideTo:900}); },
+    play(type){
+      if(type==="bomb"){
+        noise(.3, {gain:.4, freq:300, type:"lowpass"});
+        tone(130, .32, {gain:.3, slide:42});
+        return;
+      }
+      if(type==="rocket"){
+        [523,659,784,1047].forEach((f,i)=>tone(f,.12,{type:"triangle",gain:.12,delay:i*.07}));
+        noise(.25, {gain:.15, freq:3000, slideTo:6000, delay:.1});
+        return;
+      }
+      noise(.09, {gain:.22, freq:2000, q:.8, slideTo:700});
+      tone(190, .09, {gain:.14, slide:75});
+    },
+    pass(){ tone(240, .07, {gain:.08}); },
+    bid(){
+      tone(660, .09, {type:"triangle", gain:.1});
+      tone(880, .12, {type:"triangle", gain:.1, delay:.08});
+    },
+    win(){ [523,659,784,1047,1319].forEach((f,i)=>tone(f,.16,{type:"triangle",gain:.12,delay:i*.09})); },
+    lose(){ [392,330,262,196].forEach((f,i)=>tone(f,.18,{type:"sine",gain:.1,delay:i*.11})); },
+  };
+})();
+document.addEventListener("pointerdown", ()=>Sound.unlock());
+document.addEventListener("keydown", ()=>Sound.unlock());
+</script>
+<script>
+"use strict";
 /* ================= 状态 ================= */
 const $ = id => document.getElementById(id);
 const els = {
@@ -495,6 +581,7 @@ function newRound(){
     hintList:[], hintIdx:0, aiTimer:null, farmersPlayed:false,
     landlordTricks:0, over:false, bidOrder:["bottom","left","top"], bidIdx:0,
   };
+  Sound.deal();
   $("bottomTip").textContent = "3 张底牌";
   renderAll(true);
   setStatus("发牌完毕，开始叫地主。");
@@ -584,6 +671,7 @@ function doBid(p, action){
     const level = action==="bid" ? 1 : Math.max(1,...Object.values(S.bids))+1;
     S.bids[p]=level;
     S.mult = Math.pow(2, level-1);
+    Sound.bid();
     setStatus(`${NAMES[p]} ${action==="bid"?"叫地主":"抢地主"}！`);
   }else{
     setStatus(`${NAMES[p]} 不叫。`);
@@ -655,6 +743,7 @@ function toggleSelect(card){
   if(S.phase!=="playing" || S.currentTurn!=="bottom" || S.over) return;
   const i = S.selected.indexOf(card);
   if(i>=0) S.selected.splice(i,1); else S.selected.push(card);
+  Sound.select();
   S.hintList=[]; S.hintIdx=0;
   renderAll();
 }
@@ -688,10 +777,12 @@ function passTurn(){
   if(!S.lastPlay || S.lastPlayer==="bottom"){ toast("轮到你首攻，不能不出。"); return; }
   S.selected = [];
   S.passed.bottom = true;
+  Sound.pass();
   setStatus("你选择不出。");
   advanceTurn("bottom", true);
 }
 function doPlay(p, cards, an){
+  Sound.play(an.type);
   S.hands[p] = S.hands[p].filter(c=>!cards.includes(c));
   S.lastPlay = {cards, an}; S.lastPlayer = p; S.passes = 0;
   if(p!=="bottom" || true) S.selected = [];
@@ -793,6 +884,7 @@ function aiTurn(){
 }
 function aiPass(p){
   S.passed[p] = true;
+  Sound.pass();
   setStatus(`${NAMES[p]} 不出。`);
   advanceTurn(p, true);
 }
@@ -829,6 +921,7 @@ function endRound(winner){
   $("modalTitle").textContent = winYou ? "🎉 你赢了！" : `😢 ${NAMES[winner]} 赢了`;
   $("modalSub").textContent =
     `${NAMES[S.landlord]} 是地主 · 倍数 ×${mult}${spring?"（春天翻倍）":""}${bombs?` · 本局 ${bombs} 个炸弹/王炸`:""}`;
+  if(winYou) Sound.win(); else Sound.lose();
   $("modalScores").innerHTML = ORDER.map(p=>{
     const d = delta[p];
     return `<div>${NAMES[p]}${p===S.landlord?"（地主）":""}：<span class="${d>=0?"win":"lose"}">${d>=0?"+":""}${d}</span>　总分 ${scores[p]}</div>`;
@@ -848,6 +941,11 @@ doPlay = function(p, cards, an){
   if(an.type==="bomb" || an.type==="rocket") S._bombCount = (S._bombCount||0)+1;
   _doPlay(p, cards, an);
 };
+
+const btnSound = $("btnSound");
+function syncSoundBtn(){ btnSound.textContent = Sound.on ? "🔊 音效开" : "🔇 音效关"; }
+syncSoundBtn();
+btnSound.addEventListener("click", ()=>{ Sound.toggle(); syncSoundBtn(); if(Sound.on) Sound.select(); });
 
 newRound();
 </script>
