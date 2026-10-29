@@ -685,8 +685,18 @@ const Music = (()=>{
   }
   return {
     get on(){ return on; },
-    debug(){ return {on, playing: !!timer}; },
+    debug(){
+      let st = null;
+      try{ const c = Sound.getCtx(); st = c ? c.state : null; }catch(e){}
+      return {on, playing: !!timer, ctxState: st};
+    },
     unlock(){ if(on) start(); },
+    /* 打开音乐时立刻播前四个音（1 2 3 5），让用户马上确认有没有声 */
+    test(){
+      let ctx; try{ ctx = Sound.getCtx(); }catch(e){ return; }
+      if(!ctx || !gainNode) return;
+      for(let i=0;i<4;i++) scheduleStep(ctx, ctx.currentTime + 0.05 + i*EIGHTH, i);
+    },
     toggle(){
       on = !on;
       try{ localStorage.setItem("ddz-music", on?"on":"off"); }catch(e){}
@@ -695,8 +705,12 @@ const Music = (()=>{
     },
   };
 })();
-document.addEventListener("pointerdown", ()=>{ Sound.unlock(); Music.unlock(); }, {once:true});
-document.addEventListener("keydown", ()=>{ Sound.unlock(); Music.unlock(); }, {once:true});
+/* iOS 上音频解锁偶尔一次不成功，改为每次交互都尝试恢复；start() 有防重入保护 */
+function unlockAudio(){ Sound.unlock(); Music.unlock(); }
+document.addEventListener("pointerdown", unlockAudio);
+document.addEventListener("touchend", unlockAudio);
+document.addEventListener("keydown", unlockAudio);
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) unlockAudio(); });
 </script>
 <script>
 "use strict";
@@ -1137,7 +1151,7 @@ function syncMusicBtn(){ btnMusic.textContent = Music.on ? "🎵 音乐开" : "�
 syncSoundBtn(); syncVoiceBtn(); syncMusicBtn();
 btnSound.addEventListener("click", ()=>{ Sound.toggle(); syncSoundBtn(); if(Sound.on) Sound.select(); });
 btnVoice.addEventListener("click", ()=>{ Voice.toggle(); syncVoiceBtn(); if(Voice.on) Voice.say("语音已打开"); });
-btnMusic.addEventListener("click", ()=>{ Music.toggle(); syncMusicBtn(); });
+btnMusic.addEventListener("click", ()=>{ const nowOn = Music.toggle(); syncMusicBtn(); if(nowOn) Music.test(); });
 
 newRound();
 </script>
